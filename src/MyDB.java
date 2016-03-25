@@ -55,9 +55,9 @@ public class MyDB {
     private final static Map<String, String> myDBMap = new HashMap<>(INITIAL_DB_SIZE, INITIAL_DB_LOAD_FACTOR);
 
     /**
-     * numEqualToMap - Map for faster computation of num of occurances of a value in the DB.
+     * numEqualToMap - Map to pre-compute num of occurances of a value in the DB.
      */
-    private final static Map<String, Integer> numEqualToMap  = new HashMap<>();
+    private final static Map<String, HashSet<String>> numEqualToMap  = new HashMap<>();
 
     /**
      * transactionStack - stack of transactions
@@ -195,19 +195,12 @@ public class MyDB {
          */
         public static void set(String key, String value) {
             Map<String, String> mapInContext = getMapByContext();
-            if(mapInContext.get(key) != null || myDBMap.get(key) != null) {
-                String  currentValueTemp = mapInContext.get(key);
-                String currentValue = currentValueTemp != null ? currentValueTemp : myDBMap.get(key);
-                if(!currentValue.equals(value)) {
-
-                    updateNumEqualTo(currentValue, false);
-                    updateNumEqualTo(value, true);
-                }
-            }
-            else {
-                updateNumEqualTo(value, true);
-            }
+            String currentValueForKey = currentValueForKey(key);
             mapInContext.put(key, value);
+            updateNumEqualToSet(key, value, true);
+            if (currentValueForKey != null) {
+                updateNumEqualToSet(key, currentValueForKey, false);
+            }
         }
 
         /**
@@ -222,7 +215,7 @@ public class MyDB {
                 value = myDBMap.get(key);
             }
             if (value == null || value.equals(TO_BE_DELETED)){
-              value = NULL_OUTPUT;
+                value = NULL_OUTPUT;
             }
             return value;
         }
@@ -234,17 +227,11 @@ public class MyDB {
         public static void unset(String key) {
             Map<String, String> mapInContext = getMapByContext();
             String value = mapInContext.get(key);
-            if (isTransactionScope()) {
-                mapInContext.remove(key);
-                if(myDBMap.get(key) != null) {
-                    value = myDBMap.get(key);
-                    updateNumEqualTo(value, true);
-                    mapInContext.put(key, TO_BE_DELETED);
-                }
-            } else {
-                mapInContext.remove(key);
+            mapInContext.remove(key);
+            if (isTransactionScope() && myDBMap.get(key) != null) {
+                mapInContext.put(key, TO_BE_DELETED);
             }
-            updateNumEqualTo(value, false);
+            updateNumEqualToSet(key, value, false);
         }
 
 
@@ -254,7 +241,7 @@ public class MyDB {
          * @return - numEqualTo
          */
         public static int getNumEqualTo(String value) {
-            int count = numEqualToMap.get(value) != null ? numEqualToMap.get(value) : 0;
+            int count = numEqualToMap.get(value) != null ? numEqualToMap.get(value).size() : 0;
             return count;
         }
 
@@ -290,12 +277,12 @@ public class MyDB {
                 valueInDB = valueInParentTransactionMap != null ? valueInParentTransactionMap : valueInMyDB;
                 if(value.equals(TO_BE_DELETED)) {
                     value = myDBMap.get(key);
-                    updateNumEqualTo(value, true);
+                    updateNumEqualToSet(key, value, true);
                 }
+                updateNumEqualToSet(key, value, false);
                 if(valueInDB != null && !valueInDB.equals(value)) {
-                    updateNumEqualTo(valueInDB, true);
+                    updateNumEqualToSet(key, valueInDB, true);
                 }
-                updateNumEqualTo(value, false);
             }
             return Optional.empty();
         }
@@ -312,7 +299,7 @@ public class MyDB {
             for (Map.Entry<String, String> entry : transactionMap.entrySet()) {
                 String key = entry.getKey();
                 String value = entry.getValue();
-                if(value.equals(TO_BE_DELETED)) {
+                if (value.equals(TO_BE_DELETED)) {
                     myDBMap.remove(key);
                 }
                 else {
@@ -323,23 +310,19 @@ public class MyDB {
         }
 
         /**
-         * increments or decrements the numEqualTo Value of a given key.
-         * @param key - key
-         * @param isIncrement - boolean to increment or decrement.
+         * update Reverse mapping for count
          */
-        private static void updateNumEqualTo(String key, boolean isIncrement) {
-            int incrementValue = isIncrement ? 1 : -1;
-            int numEqualTo = 0;
-            if(numEqualToMap.get(key) != null) {
-                numEqualTo = numEqualToMap.get(key) + incrementValue;
-            } else if (isIncrement) {
-                numEqualTo = 1;
+        private static void updateNumEqualToSet(String key, String value, boolean isAddition) {
+            HashSet keySet = numEqualToMap.get(value);
+            if(keySet == null) {
+                keySet = new HashSet();
             }
-            if(numEqualTo > 0) {
-                numEqualToMap.put(key, numEqualTo);
+            if(isAddition) {
+                keySet.add(key);
             } else {
-                numEqualToMap.remove(key);
+                keySet.remove(key);
             }
+            numEqualToMap.put(value, keySet);
         }
 
         /**
@@ -354,8 +337,18 @@ public class MyDB {
          * returns is there is a transaction in progress.
          * @return - is Transaction scope or not
          */
-         private static boolean isTransactionScope() {
-           return !transactionStack.empty();
+        private static boolean isTransactionScope() {
+            return !transactionStack.empty();
+        }
+
+        private static String currentValueForKey(String key) {
+            String currentValue = null;
+            Map<String, String> mapInContext = getMapByContext();
+            String valueInMyDB = myDBMap.get(key);
+            if(mapInContext != null) {
+                currentValue = mapInContext.get(key);
+            }
+            return currentValue != null ? currentValue : valueInMyDB;
         }
     }
 }
